@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <title>Carte agences Demeco — Géocodage live</title>
+  <title>Carte agences Demeco — Données Airtable</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <style>
@@ -38,19 +38,17 @@
   </div>
 
   <script>
-  // 🔑 Identifiants Airtable fournis
+  // 🔑 Identifiants Airtable
   const AIRTABLE_TOKEN = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
   const BASE_ID = "app5DoZKkIuqd6Quo";
   const TABLE_ID = "tblcLGQDcypZPFbZA";
 
-  // Carte
+  // Initialisation de la carte
   const map = L.map('map').setView([46.5, 2.5], 6);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap'
   }).addTo(map);
 
-  // UI loader
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const loader = document.getElementById('loader');
   const loaderText = document.getElementById('loaderText');
   const loaderBar = document.getElementById('loaderBar');
@@ -65,55 +63,27 @@
     return "green";
   }
 
-  // Petit cache local (navigateur) pour éviter de regéocoder
-  const GEO_CACHE_KEY = "geoCache_demeco_v1";
-  const geoCache = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) || "{}");
-  function saveCache() {
-    localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(geoCache));
-  }
-
-  // Géocodeur Nominatim (1 req / ~900 ms)
-  async function geocode(address) {
-    const key = address.trim().toLowerCase();
-    if (geoCache[key]) return geoCache[key];
-
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-    try {
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        const coords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
-        geoCache[key] = coords;
-        saveCache();
-        return coords;
-      }
-    } catch (e) {
-      console.warn("Géocodage KO:", address, e);
-    }
-    return null;
-  }
-
-  // Récupérer tous les enregistrements (pagination)
+  // Récupérer tous les enregistrements Airtable (avec pagination)
   async function fetchAllRecords() {
     const baseUrl = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
     let offset = null;
     const all = [];
-    let page = 0;
 
     while (true) {
-      page++;
       const url = new URL(baseUrl);
       url.searchParams.set('pageSize', '100');
       if (offset) url.searchParams.set('offset', offset);
 
-      const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` }});
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` }
+      });
       const data = await res.json();
       if (data.error) {
         console.error('Erreur Airtable:', data.error);
-        alert(`Erreur Airtable: ${data.error.type || ''} ${data.error.message || ''}`);
+        alert(`Erreur Airtable: ${data.error.message || data.error.type}`);
         break;
       }
-      (data.records || []).forEach(r => all.push(r));
+      all.push(...(data.records || []));
       if (!data.offset) break;
       offset = data.offset;
     }
@@ -128,48 +98,32 @@
     const records = await fetchAllRecords();
     if (!records.length) {
       loader.style.display = 'none';
-      alert("Aucun enregistrement reçu d’Airtable (vérifie les droits & le TABLE_ID).");
+      alert("Aucun enregistrement reçu d’Airtable (vérifie le TABLE_ID ou les permissions).");
       return;
     }
 
     let done = 0;
     for (const rec of records) {
       const f = rec.fields || {};
+      const lat = parseFloat(f["Latitude"]);
+      const lng = parseFloat(f["Longitude"]);
 
-      // 1) Adresse à privilégier : "adresse complète"
-      // 2) Sinon fallback sur ADRESSE + VILLE + CODE POSTAL (et on ajoute ", France" si rien d’autre)
-      let address = f["adresse complète"] || "";
-      if (!address || address.trim() === "") {
-        address = `${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}`.trim();
-      }
-      if (address && !/france|belgique|espagne|italie|suisse|allemagne|luxembourg|portugal/i.test(address)) {
-        address += ", France"; // aide le géocodeur si pays absent
-      }
+      // On ne place que si les coordonnées existent
+      if (!isNaN(lat) && !isNaN(lng)) {
+        const popup = `
+          <strong>${f["AGENCE "] || "Sans nom"}</strong><br>
+          📍 ${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}<br>
+          👤 Direction : ${f["DIRECTION D'AGENCE"] || ""}<br>
+          📧 ${f["MAIL CONTACT LEAD "] || ""}<br>
+          🌐 <a href="${f["LIEN SITE WEB "] || "#"}" target="_blank">Site web</a><br>
+          ⭐ <a href="${f["URL Avis Google"] || "#"}" target="_blank">Avis Google</a>
+        `;
 
-      if (address && address !== ", France") {
-        const coords = await geocode(address);
-        // Respecter un petit délai pour Nominatim (évite rate-limit)
-        await sleep(900);
-
-        if (coords) {
-          const popup = `
-            <strong>${f["AGENCE "] || "Sans nom"}</strong><br>
-            📍 ${address}<br>
-            👤 Direction : ${f["DIRECTION D'AGENCE"] || ""}<br>
-            📧 ${f["MAIL CONTACT LEAD "] || ""}<br>
-            🌐 <a href="${f["LIEN SITE WEB "] || "#"}" target="_blank">Site web</a><br>
-            ⭐ <a href="${f["URL Avis Google"] || "#"}" target="_blank">Avis Google</a>
-          `;
-          L.circleMarker(coords, {
-            color: colorByType(f["TYPE AGENCE"]),
-            radius: 8,
-            fillOpacity: 0.85
-          }).addTo(map).bindPopup(popup);
-        } else {
-          console.warn("❌ Géocodage introuvable pour :", address, f);
-        }
-      } else {
-        console.warn("⚠️ Adresse vide pour :", f);
+        L.circleMarker([lat, lng], {
+          color: colorByType(f["TYPE AGENCE"]),
+          radius: 8,
+          fillOpacity: 0.85
+        }).addTo(map).bindPopup(popup);
       }
 
       done++;
@@ -185,4 +139,3 @@
   </script>
 </body>
 </html>
-
