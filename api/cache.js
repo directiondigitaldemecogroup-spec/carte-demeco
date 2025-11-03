@@ -5,6 +5,15 @@ let cachedTime = 0;
 const CACHE_DURATION = 1000 * 60 * 10; // 10 minutes
 
 export default async function handler(req, res) {
+
+  res.setHeader("Access-Control-Allow-Origin", "*"); // ou ton domaine spécifique
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  
   const now = Date.now();
 
   // Renvoi cache si valide
