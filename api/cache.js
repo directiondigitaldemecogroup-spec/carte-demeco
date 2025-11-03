@@ -1,70 +1,114 @@
 // /api/cache.js
+import fetch from "node-fetch";
 
 let cachedData = null;
 let cachedTime = 0;
-const CACHE_DURATION = 1000 * 60 * 10; // 10 minutes
+const CACHE_DURATION = 1000 * 60 * 60; // 1h
 
+const AIRTABLE_API_KEY = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
+const BASE_ID = "app5DoZKkIuqd6Quo";
+const TABLE_ID = "tblcLGQDcypZPFbZA";
+
+// Helper pour sleep
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Géocodeur Nominatim
+async function geocode(address, geoCache) {
+  const key = address.trim().toLowerCase();
+  if (geoCache[key]) return geoCache[key];
+
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
+  try {
+    const res = await fetch(url, { headers: { "Accept": "application/json", "User-Agent": "VercelServer/1.0" } });
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const coords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+      geoCache[key] = coords;
+      return coords;
+    }
+  } catch (e) {
+    console.warn("Géocodage KO:", address, e);
+  }
+  return null;
+}
+
+// Récupérer tous les records Airtable
+async function fetchAllRecords() {
+  const baseUrl = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
+  let offset = null;
+  const all = [];
+  while (true) {
+    const url = new URL(baseUrl);
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(`${data.error.type || ""} ${data.error.message || ""}`);
+
+    (data.records || []).forEach((r) => all.push(r));
+    if (!data.offset) break;
+    offset = data.offset;
+  }
+  return all;
+}
+
+// Endpoint handler
 export default async function handler(req, res) {
-
-  res.setHeader("Access-Control-Allow-Origin", "*"); // ou ton domaine spécifique
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-  
-  const now = Date.now();
-
-  // Renvoi cache si valide
-  if (cachedData && (now - cachedTime < CACHE_DURATION)) {
+  // Retourner cache si encore valide
+  if (cachedData && Date.now() - cachedTime < CACHE_DURATION) {
     return res.status(200).json(cachedData);
   }
 
-  // Vérification de la variable d'environnement
-  if (!process.env.AIRTABLE_API_KEY) {
-    console.error("❌ AIRTABLE_API_KEY non définie !");
-    return res.status(500).json({ error: "AIRTABLE_API_KEY non définie !" });
-  }
-
-  const BASE_ID = "app5DoZKkIuqd6Quo";      // Ton Base ID
-  const TABLE_ID = "tblcLGQDcypZPFbZA";     // Ton Table ID
-  const AIRTABLE_TOKEN = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
-
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
-
-  console.log("🔹 Appel Airtable URL:", url);
-
-  
-  //console.log("🔹 Utilisation clé:", process.env.AIRTABLE_API_KEY.slice(0, 8) + "...");
-
   try {
-    const airtableRes = await fetch(url, {
-      headers: {
-        //Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`
-      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
-     "User-Agent": "Mozilla/5.0 (compatible; VercelServer/1.0)"
-      
+    const records = await fetchAllRecords();
+    const geoCache = {}; // cache temporaire pour cette génération
+    const results = [];
+
+    for (const rec of records) {
+      const f = rec.fields || {};
+      let address = f["adresse complète"] || `${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}`.trim();
+      if (address && !/france|belgique|espagne|italie|suisse|allemagne|luxembourg|portugal/i.test(address)) {
+        address += ", France";
       }
-    });
 
-    console.log("🔹 Status Airtable:", airtableRes.status);
+      if (address && address !== ", France") {
+        const coords = await geocode(address, geoCache);
+        await sleep(900); // éviter rate-limit Nominatim
 
-    const data = await airtableRes.json();
-    console.log("🔹 Réponse Airtable:", data);
-
-    if (!airtableRes.ok) {
-      return res.status(airtableRes.status).json({ error: data.error || "Erreur Airtable" });
+        results.push({
+          name: f["AGENCE "] || "Sans nom",
+          address,
+          type: f["TYPE AGENCE"] || "",
+          direction: f["DIRECTION D'AGENCE"] || "",
+          mail: f["MAIL CONTACT LEAD "] || "",
+          site: f["LIEN SITE WEB "] || "",
+          avis: f["URL Avis Google"] || "",
+          coords,
+        });
+      } else {
+        results.push({
+          name: f["AGENCE "] || "Sans nom",
+          address: null,
+          coords: null,
+        });
+      }
     }
 
-    // Mise à jour du cache
-    cachedData = data;
-    cachedTime = now;
+    cachedData = results;
+    cachedTime = Date.now();
 
-    return res.status(200).json(data);
-
+    return res.status(200).json(results);
   } catch (err) {
-    console.error("❌ Erreur fetch Airtable:", err);
+    console.error("Erreur fetch/cache:", err);
     return res.status(500).json({ error: err.message });
   }
 }
