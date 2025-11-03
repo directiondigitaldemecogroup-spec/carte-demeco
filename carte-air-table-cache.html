@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Carte agences Demeco — Géocodage live</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .legend { position: fixed; bottom: 16px; left: 16px; background: #fff; border: 1px solid #999; padding: 10px; font: 14px/1.3 sans-serif; z-index: 9999; }
+    .loader { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); background: #fff; border: 1px solid #ccc; padding: 6px 10px; border-radius: 6px; z-index: 9999; font: 13px/1.2 sans-serif; }
+    .bar { height: 6px; background: #eee; border-radius: 4px; margin-top: 6px; width: 320px; overflow: hidden; }
+    .bar > span { display: block; height: 100%; width: 0; background: #4c8bf5; transition: width .2s; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="loader" id="loader" style="display:none;">
+    <div id="loaderText">Chargement…</div>
+    <div class="bar"><span id="loaderBar"></span></div>
+  </div>
+
+  <div class="legend">
+    <b>🗺️ Légende</b><br>
+    <span style="color:red">●</span> Intégrée<br>
+    <span style="color:blue">●</span> Franchisée<br>
+    <span style="color:orange">●</span> Demeseul<br>
+    <span style="color:green">●</span> Autres<br>
+  </div>
+
+  <script>
+  // Carte
+  const map = L.map('map').setView([46.5, 2.5], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+
+  // UI loader
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const loader = document.getElementById('loader');
+  const loaderText = document.getElementById('loaderText');
+  const loaderBar = document.getElementById('loaderBar');
+
+  // Couleurs selon type d’agence
+  function colorByType(type) {
+    if (!type) return "green";
+    const t = String(type).toLowerCase();
+    if (t.includes("intégrée")) return "red";
+    if (t.includes("franchisée") || t.includes("franchisé")) return "blue";
+    if (t.includes("demeseul")) return "orange";
+    return "green";
+  }
+
+  // Petit cache local (navigateur) pour éviter de regéocoder
+  const GEO_CACHE_KEY = "geoCache_demeco_v1";
+  const geoCache = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) || "{}");
+  function saveCache() { localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(geoCache)); }
+
+  // Géocodeur Nominatim (1 req / ~900 ms)
+  async function geocode(address) {
+    const key = address.trim().toLowerCase();
+    if (geoCache[key]) return geoCache[key];
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
+    try {
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const coords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+        geoCache[key] = coords;
+        saveCache();
+        return coords;
+      }
+    } catch (e) { console.warn("Géocodage KO:", address, e); }
+    return null;
+  }
+
+  // Récupérer les données depuis l’API cache Vercel
+  async function fetchRecords() {
+    loader.style.display = 'block';
+    loaderText.textContent = 'Chargement des agences…';
+    loaderBar.style.width = '5%';
+
+    try {
+      const res = await fetch("https://carte-demeco-kuaace2e0-hexvias-projects.vercel.app/api/cache");
+      const data = await res.json();
+      return data.records || [];
+    } catch (e) {
+      console.error("Erreur récupération API cache :", e);
+      alert("Impossible de récupérer les données des agences !");
+      loader.style.display = 'none';
+      return [];
+    }
+  }
+
+  async function main() {
+    const records = await fetchRecords();
+    if (!records.length) return;
+
+    let done = 0;
+    for (const rec of records) {
+      const f = rec.fields || {};
+      let address = f["adresse complète"] || "";
+      if (!address || address.trim() === "") {
+        address = `${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}`.trim();
+      }
+      if (address && !/france|belgique|espagne|italie|suisse|allemagne|luxembourg|portugal/i.test(address)) {
+        address += ", France";
+      }
+
+      if (address && address !== ", France") {
+        const coords = await geocode(address);
+        await sleep(900); // pour Nominatim
+
+        if (coords) {
+          const popup = `
+            <strong>${f["AGENCE "] || "Sans nom"}</strong><br>
+            📍 ${address}<br>
+            👤 Direction : ${f["DIRECTION D'AGENCE"] || ""}<br>
+            📧 ${f["MAIL CONTACT LEAD "] || ""}<br>
+            🌐 <a href="${f["LIEN SITE WEB "] || "#"}" target="_blank">Site web</a><br>
+            ⭐ <a href="${f["URL Avis Google"] || "#"}" target="_blank">Avis Google</a>
+          `;
+          L.circleMarker(coords, {
+            color: colorByType(f["TYPE AGENCE"]),
+            radius: 8,
+            fillOpacity: 0.85
+          }).addTo(map).bindPopup(popup);
+        }
+      }
+
+      done++;
+      const pct = Math.max(5, Math.round((done / records.length) * 100));
+      loaderText.textContent = `Placement des agences… ${pct}%`;
+      loaderBar.style.width = pct + '%';
+    }
+
+    loader.style.display = 'none';
+  }
+
+  main();
+  </script>
+</body>
+</html>
