@@ -29,16 +29,21 @@ export default async function handler(req, res) {
 
   const BASE_ID = "app5DoZKkIuqd6Quo";      // Ton Base ID
   const TABLE_ID = "tblcLGQDcypZPFbZA";     // Ton Table ID
+  const AIRTABLE_TOKEN = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
 
   const url = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
 
   console.log("🔹 Appel Airtable URL:", url);
-  console.log("🔹 Utilisation clé:", process.env.AIRTABLE_API_KEY.slice(0, 8) + "...");
+
+  
+  //console.log("🔹 Utilisation clé:", process.env.AIRTABLE_API_KEY.slice(0, 8) + "...");
 
   try {
     const airtableRes = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`
+        //Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`
+
       }
     });
 
