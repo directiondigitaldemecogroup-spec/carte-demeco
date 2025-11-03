@@ -80,7 +80,7 @@
     loaderBar.style.width = '5%';
 
     try {
-      const res = await fetch("https://carte-demeco-kuaace2e0-hexvias-projects.vercel.app/api/cache");
+      const res = await fetch("/api/cache");
       const data = await res.json();
       return data.records || [];
     } catch (e) {
