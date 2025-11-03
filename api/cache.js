@@ -9,9 +9,11 @@ export default async function handler(req, res) {
     return res.status(200).json(cachedData);
   }
 
+ const BASE_ID = "app5DoZKkIuqd6Quo";
+const TABLE_ID = "tblcLGQDcypZPFbZA";
 
   const airtableRes = await fetch(
-    "https://api.airtable.com/v0/app5DoZKkIuqd6Quo/tblcLGQDcypZPFbZA",
+   `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`,
     {
       headers: {
         Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`,
