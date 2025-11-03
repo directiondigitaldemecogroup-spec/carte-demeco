@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <title>Carte agences Demeco — Géocodage live</title>
+  <title>Carte agences Demeco — Cache serveur</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <style>
@@ -35,7 +35,6 @@
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
   // UI loader
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const loader = document.getElementById('loader');
   const loaderText = document.getElementById('loaderText');
   const loaderBar = document.getElementById('loaderBar');
@@ -50,30 +49,7 @@
     return "green";
   }
 
-  // Petit cache local (navigateur) pour éviter de regéocoder
-  const GEO_CACHE_KEY = "geoCache_demeco_v1";
-  const geoCache = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) || "{}");
-  function saveCache() { localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(geoCache)); }
-
-  // Géocodeur Nominatim (1 req / ~900 ms)
-  async function geocode(address) {
-    const key = address.trim().toLowerCase();
-    if (geoCache[key]) return geoCache[key];
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-    try {
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        const coords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
-        geoCache[key] = coords;
-        saveCache();
-        return coords;
-      }
-    } catch (e) { console.warn("Géocodage KO:", address, e); }
-    return null;
-  }
-
-  // Récupérer les données depuis l’API cache Vercel
+  // Récupérer les données depuis l’API cache serveur
   async function fetchRecords() {
     loader.style.display = 'block';
     loaderText.textContent = 'Chargement des agences…';
@@ -82,7 +58,7 @@
     try {
       const res = await fetch("/api/cache");
       const data = await res.json();
-      return data.records || [];
+      return data || [];
     } catch (e) {
       console.error("Erreur récupération API cache :", e);
       alert("Impossible de récupérer les données des agences !");
@@ -97,34 +73,24 @@
 
     let done = 0;
     for (const rec of records) {
-      const f = rec.fields || {};
-      let address = f["adresse complète"] || "";
-      if (!address || address.trim() === "") {
-        address = `${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}`.trim();
-      }
-      if (address && !/france|belgique|espagne|italie|suisse|allemagne|luxembourg|portugal/i.test(address)) {
-        address += ", France";
-      }
+      const f = rec;
+      const coords = f.coords;
 
-      if (address && address !== ", France") {
-        const coords = await geocode(address);
-        await sleep(900); // pour Nominatim
+      if (coords) {
+        const popup = `
+          <strong>${f.name || "Sans nom"}</strong><br>
+          📍 ${f.address}<br>
+          👤 Direction : ${f.direction || ""}<br>
+          📧 ${f.mail || ""}<br>
+          🌐 <a href="${f.site || "#"}" target="_blank">Site web</a><br>
+          ⭐ <a href="${f.avis || "#"}" target="_blank">Avis Google</a>
+        `;
 
-        if (coords) {
-          const popup = `
-            <strong>${f["AGENCE "] || "Sans nom"}</strong><br>
-            📍 ${address}<br>
-            👤 Direction : ${f["DIRECTION D'AGENCE"] || ""}<br>
-            📧 ${f["MAIL CONTACT LEAD "] || ""}<br>
-            🌐 <a href="${f["LIEN SITE WEB "] || "#"}" target="_blank">Site web</a><br>
-            ⭐ <a href="${f["URL Avis Google"] || "#"}" target="_blank">Avis Google</a>
-          `;
-          L.circleMarker(coords, {
-            color: colorByType(f["TYPE AGENCE"]),
-            radius: 8,
-            fillOpacity: 0.85
-          }).addTo(map).bindPopup(popup);
-        }
+        L.circleMarker(coords, {
+          color: colorByType(f.type),
+          radius: 8,
+          fillOpacity: 0.85
+        }).addTo(map).bindPopup(popup);
       }
 
       done++;
