@@ -1,18 +1,16 @@
-// /api/cache.js
+import fs from "fs";
+import path from "path";
 import fetch from "node-fetch";
 
-let cachedData = null;
-let cachedTime = 0;
+const CACHE_FILE = path.join(process.cwd(), "cache.json");
 const CACHE_DURATION = 1000 * 60 * 60; // 1h
 
 const AIRTABLE_API_KEY = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
 const BASE_ID = "app5DoZKkIuqd6Quo";
 const TABLE_ID = "tblcLGQDcypZPFbZA";
 
-// Helper pour sleep
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Géocodeur Nominatim
 async function geocode(address, geoCache) {
   const key = address.trim().toLowerCase();
   if (geoCache[key]) return geoCache[key];
@@ -32,7 +30,6 @@ async function geocode(address, geoCache) {
   return null;
 }
 
-// Récupérer tous les records Airtable
 async function fetchAllRecords() {
   const baseUrl = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
   let offset = null;
@@ -55,7 +52,31 @@ async function fetchAllRecords() {
   return all;
 }
 
-// Endpoint handler
+// Lire le cache JSON
+function readCache() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const raw = fs.readFileSync(CACHE_FILE, "utf8");
+      const obj = JSON.parse(raw);
+      if (Date.now() - obj.cachedTime < CACHE_DURATION) {
+        return obj.data;
+      }
+    }
+  } catch (e) {
+    console.warn("Impossible de lire le cache JSON:", e);
+  }
+  return null;
+}
+
+// Écrire dans le cache JSON
+function writeCache(data) {
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({ cachedTime: Date.now(), data }), "utf8");
+  } catch (e) {
+    console.warn("Impossible d’écrire le cache JSON:", e);
+  }
+}
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -63,14 +84,13 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  // Retourner cache si encore valide
-  if (cachedData && Date.now() - cachedTime < CACHE_DURATION) {
-    return res.status(200).json(cachedData);
-  }
+  // Vérifier le cache
+  const cached = readCache();
+  if (cached) return res.status(200).json(cached);
 
   try {
     const records = await fetchAllRecords();
-    const geoCache = {}; // cache temporaire pour cette génération
+    const geoCache = {};
     const results = [];
 
     for (const rec of records) {
@@ -80,32 +100,23 @@ export default async function handler(req, res) {
         address += ", France";
       }
 
-      if (address && address !== ", France") {
-        const coords = await geocode(address, geoCache);
-        await sleep(900); // éviter rate-limit Nominatim
+      let coords = null;
+      if (address && address !== ", France") coords = await geocode(address, geoCache);
+      await sleep(900);
 
-        results.push({
-          name: f["AGENCE "] || "Sans nom",
-          address,
-          type: f["TYPE AGENCE"] || "",
-          direction: f["DIRECTION D'AGENCE"] || "",
-          mail: f["MAIL CONTACT LEAD "] || "",
-          site: f["LIEN SITE WEB "] || "",
-          avis: f["URL Avis Google"] || "",
-          coords,
-        });
-      } else {
-        results.push({
-          name: f["AGENCE "] || "Sans nom",
-          address: null,
-          coords: null,
-        });
-      }
+      results.push({
+        name: f["AGENCE "] || "Sans nom",
+        address,
+        type: f["TYPE AGENCE"] || "",
+        direction: f["DIRECTION D'AGENCE"] || "",
+        mail: f["MAIL CONTACT LEAD "] || "",
+        site: f["LIEN SITE WEB "] || "",
+        avis: f["URL Avis Google"] || "",
+        coords,
+      });
     }
 
-    cachedData = results;
-    cachedTime = Date.now();
-
+    writeCache(results);
     return res.status(200).json(results);
   } catch (err) {
     console.error("Erreur fetch/cache:", err);
