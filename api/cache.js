@@ -42,8 +42,9 @@ export default async function handler(req, res) {
     const airtableRes = await fetch(url, {
       headers: {
         //Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`
-      Authorization: `Bearer ${AIRTABLE_TOKEN}`
-
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+     "User-Agent": "Mozilla/5.0 (compatible; VercelServer/1.0)"
+      
       }
     });
 
