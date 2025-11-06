@@ -1,141 +1,347 @@
 <!DOCTYPE html>
 <html lang="fr">
-<head>
-  <meta charset="utf-8" />
-  <title>Carte agences Demeco — Données Airtable</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <style>
-    html, body, #map { height: 100%; margin: 0; }
-    .legend {
-      position: fixed; bottom: 16px; left: 16px;
-      background: #fff; border: 1px solid #999; padding: 10px;
-      font: 14px/1.3 sans-serif; z-index: 9999;
-    }
-    .loader {
-      position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
-      background: #fff; border: 1px solid #ccc; padding: 6px 10px; border-radius: 6px; z-index: 9999;
-      font: 13px/1.2 sans-serif;
-    }
-    .bar { height: 6px; background: #eee; border-radius: 4px; margin-top: 6px; width: 320px; overflow: hidden; }
-    .bar > span { display: block; height: 100%; width: 0; background: #4c8bf5; transition: width .2s; }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Carte interactive Demeco</title>
 
-  <div class="loader" id="loader" style="display:none;">
-    <div id="loaderText">Chargement…</div>
-    <div class="bar"><span id="loaderBar"></span></div>
-  </div>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-  <div class="legend">
-    <b>🗺️ Légende</b><br>
-    <span style="color:red">●</span> Intégrée<br>
-    <span style="color:blue">●</span> Franchisée<br>
-    <span style="color:orange">●</span> Demeseul<br>
-    <span style="color:green">●</span> Autres<br>
-  </div>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        font-family: system-ui, sans-serif;
+      }
+      #map { height: 100vh; width: 100%; }
 
-  <script>
-  // 🔑 Identifiants Airtable
-  const AIRTABLE_TOKEN = "patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4";
-  const BASE_ID = "app5DoZKkIuqd6Quo";
-  const TABLE_ID = "tblcLGQDcypZPFbZA";
+      .logo-container {
+        position: fixed;
+        top: 15px;
+        right: 15px;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 10px;
+        padding: 6px 10px;
+        box-shadow: 0 0 6px rgba(0,0,0,0.25);
+        z-index: 9999;
+      }
+      .logo-container img { height: 60px; }
 
-  // Initialisation de la carte
-  const map = L.map('map').setView([46.5, 2.5], 6);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap'
-  }).addTo(map);
+      .legend {
+        position: fixed;
+        bottom: 15px;
+        left: 15px;
+        z-index: 9999;
+        background: rgba(255,255,255,0.95);
+        padding: 10px 12px;
+        font-size: 13px;
+        border-radius: 8px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.25);
+        line-height: 1.6;
+      }
 
-  const loader = document.getElementById('loader');
-  const loaderText = document.getElementById('loaderText');
-  const loaderBar = document.getElementById('loaderBar');
+      .search-container {
+        position: fixed;
+        top: 15px;
+        left: 15px;
+        z-index: 9999;
+        width: 260px;
+      }
+      .search-container input {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid #aaa;
+        font-size: 14px;
+        background:#fff;
+      }
+      .results-list {
+        background: rgba(255,255,255,0.95);
+        max-height: 200px;
+        overflow-y: auto;
+        border-radius: 6px;
+        margin-top: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+        display: none;
+      }
+      .result-item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #eee; }
+      .result-item:hover { background: #f5f5f5; }
 
-  // Couleurs selon type d’agence
-  function colorByType(type) {
-    if (!type) return "green";
-    const t = String(type).toLowerCase();
-    if (t.includes("intégrée")) return "red";
-    if (t.includes("franchisée") || t.includes("franchisé")) return "blue";
-    if (t.includes("demeseul")) return "orange";
-    return "green";
-  }
+      .popup-content { color:#000; font-size:13px; line-height:1.4; width: 230px; }
+      .popup-buttons { display:flex; justify-content:space-between; margin-top:8px; gap:4px; }
+      .popup-btn {
+        flex:1; padding:6px 8px; border:none; border-radius:4px; font-size:12px; cursor:pointer;
+        font-weight:600; color:white; transition:transform .15s ease, background .3s;
+      }
+      .popup-btn:hover { transform: scale(1.05); }
+      .btn-dir { background:#1976d2; } .btn-dir:hover { background:#1565c0; }
+      .btn-contact { background:#4caf50; } .btn-contact:hover { background:#449d48; }
 
-  // Récupérer tous les enregistrements Airtable (avec pagination)
-  async function fetchAllRecords() {
-    const baseUrl = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
-    let offset = null;
-    const all = [];
+      .popup-extra {
+        margin-top:6px; padding:6px; border-radius:5px; background:#f5f5f5; font-size:12px;
+        box-shadow: inset 0 0 4px rgba(0,0,0,0.1); overflow:hidden; max-height:0; opacity:0;
+        transition:max-height .35s ease, opacity .35s ease, padding .35s ease;
+      }
+      .popup-extra.show { max-height: 220px; opacity:1; padding:8px 6px; }
 
-    while (true) {
-      const url = new URL(baseUrl);
-      url.searchParams.set('pageSize', '100');
-      if (offset) url.searchParams.set('offset', offset);
+      .google-btn {
+        display:inline-block; margin-top:6px; background:#1a73e8; color:#fff!important;
+        padding:5px 8px; border-radius:4px; text-decoration:none; font-weight:600; font-size:12px;
+      }
+      .google-btn:hover { background:#1669c1; }
 
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` }
+      #splash-screen {
+        position: fixed; top:0; left:0; width:100%; height:100%;
+        background: rgba(0,0,0,0.85);
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        z-index: 10000; transition: opacity 0.8s ease; backdrop-filter: blur(4px);
+      }
+      #splash-screen img { width: 160px; margin-bottom: 25px; }
+      #progress { margin-top: 8px; font-size: 15px; color: #ccc; font-weight: 600; }
+      .progress-bar {
+        width: 250px; height: 10px; background: rgba(255,255,255,0.2);
+        border-radius: 5px; margin-top: 12px; overflow: hidden; box-shadow: inset 0 0 5px rgba(0,0,0,0.25);
+      }
+      .progress-bar-inner { height: 100%; width: 0%; background: #e30613; transition: width 0.3s ease; }
+    </style>
+  </head>
+
+  <body>
+    <div id="map"></div>
+
+    <div class="search-container">
+      <input type="text" id="searchInput" placeholder="🔍 Rechercher une agence..." />
+      <div class="results-list" id="resultsList"></div>
+    </div>
+
+    <!-- Logo (URL direct iBB) -->
+    <div class="logo-container">
+      <a href="https://www.demeco.fr" target="_blank" rel="noopener">
+        <img src="https://i.ibb.co/bjQPdBFb/Logo-Demeco-Transparent.png" alt="Logo Demeco" />
+      </a>
+    </div>
+
+    <div class="legend">
+      <b>Légende</b><br />
+      <img src="https://i.ibb.co/dwMNf3ys/cheval.webp" width="22" /> Intégrée<br />
+      <img src="https://i.ibb.co/ycZL5NML/carton-png.png" width="22" /> Franchisée<br />
+      <img src="https://i.ibb.co/HTF1H829/camiondemeco-png.png" width="22" /> Demeseul
+    </div>
+
+    <div id="splash-screen">
+      <img src="https://i.ibb.co/bjQPdBFb/Logo-Demeco-Transparent.png" alt="Demeco" />
+      <p style="color:#fff;margin:0 0 8px;">Chargement des agences Demeco...</p>
+      <div id="progress">0%</div>
+      <div class="progress-bar"><div class="progress-bar-inner" id="progressBarInner"></div></div>
+    </div>
+
+    <script>
+      /* Airtable API */
+      const AIRTABLE_TOKEN = 'patCagDMpXwNLGyQu.ed05d2b62289d165c562eed44a9e04b7f424b708179f288461a499caebe77ac4';
+      const BASE_ID = 'app5DoZKkIuqd6Quo';
+      const TABLE_ID = 'tblcLGQDcypZPFbZA';
+
+      /* Leaflet Map */
+      const map = L.map('map').setView([46.5, 2.5], 6);
+      let markers = [];
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+      }).addTo(map);
+
+      /* Icônes personnalisées */
+      function buildIcon(type) {
+        const t = (type || '').toLowerCase();
+        let url = 'https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png';
+        if (t.includes('intégrée')) url = 'https://i.ibb.co/dwMNf3ys/cheval.webp';
+        else if (t.includes('franchisée') || t.includes('franchise')) url = 'https://i.ibb.co/ycZL5NML/carton-png.png';
+        else if (t.includes('demeseul')) url = 'https://i.ibb.co/HTF1H829/camiondemeco-png.png';
+
+        return L.divIcon({
+          html: `<img src="${url}" alt="" style="width:36px;height:36px;display:block;">`,
+          className: '',
+          iconSize: [36, 36],
+          iconAnchor: [18, 36],
+          popupAnchor: [0, -32],
+        });
+      }
+
+      /* Lecture Airtable */
+      async function fetchAllRecords() {
+        const baseUrl = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`;
+        let offset = null;
+        const all = [];
+
+        do {
+          const url = new URL(baseUrl);
+          url.searchParams.set('pageSize', '100');
+          if (offset) url.searchParams.set('offset', offset);
+
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` },
+          });
+          const data = await res.json();
+
+          if (data.error) {
+            console.error('Erreur Airtable:', data.error);
+            break;
+          }
+
+          (data.records || []).forEach(r => all.push(r));
+          offset = data.offset;
+        } while (offset);
+
+        return all;
+      }
+
+      function getNameFromEmail(email) {
+        if (!email) return 'Non renseigné';
+        let part = email.split('@')[0].replace(/[\.\-_]/g, ' ');
+        return part.split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      }
+
+      /* MAIN */
+      async function main() {
+        const splash = document.getElementById('splash-screen');
+        const progress = document.getElementById('progress');
+        const progressBarInner = document.getElementById('progressBarInner');
+
+        const records = await fetchAllRecords();
+        let done = 0;
+
+        for (const rec of records) {
+          const f = rec.fields || {};
+          const lat = parseFloat(f['Latitude']);
+          const lng = parseFloat(f['Longitude']);
+          if (isNaN(lat) || isNaN(lng)) {
+            done++;
+            const pct0 = Math.round((done / records.length) * 100);
+            progress.textContent = pct0 + '%';
+            progressBarInner.style.width = pct0 + '%';
+            continue;
+          }
+
+          const name = f['AGENCE '] || f['AGENCE'] || 'Sans nom';
+          /* ✅ adresse strictement issue de ADRESSE-OK */
+          const address = f['ADRESSE-OK'] || '';
+          const type = f['TYPE AGENCE'] || '';
+          const type2 = f['TYPE 2'] || '';
+          const site = f['LIEN SITE WEB '] || '#';
+          const googleAvis = f['URL Avis Google'] || null;
+
+          const dirMail = f["DIRECTION D'AGENCE"] || '';
+          const dirNom = getNameFromEmail(dirMail);
+          const dirTel = f['NUMERO HISTORIQUE'] || 'Non renseigné';
+          const contactMail = f['MAIL CONTACT LEAD '] || 'Non renseigné';
+          const contactTel = f['NUMERO DEMECO.FR'] || 'Non renseigné';
+
+          /* ✅ Bouton Street View basé sur ADRESSE-OK */
+          const streetViewURL = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
+
+
+          const popupHTML = `
+            <div class="popup-content">
+              <strong style="font-size:14px;">${name}</strong><br>
+              🏢 <em>${type2 || type || 'Type non renseigné'}</em><br>
+              📍 ${address}<br>
+              🌐 <a href="${site}" target="_blank" rel="noopener">Site web</a><br>
+              ${googleAvis ? `<a href="${googleAvis}" class="google-btn" target="_blank" rel="noopener">⭐ Avis Google</a>` : ''}
+
+              <div class="popup-buttons">
+                <button class="popup-btn btn-dir">Direction</button>
+                <button class="popup-btn btn-contact">Contact</button>
+              </div>
+
+              <a href="${streetViewURL}" target="_blank" rel="noopener"
+                 style="display:block;margin-top:8px;text-align:center;background:#000;color:#fff;padding:6px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;">
+                 🚶 Voir en Street View
+              </a>
+
+              <div class="popup-extra"></div>
+            </div>
+          `;
+
+          const marker = L.marker([lat, lng], { icon: buildIcon(type) })
+            .addTo(map)
+            .bindPopup(popupHTML);
+
+          marker.on('popupopen', (e) => {
+            const popupEl = e.popup._contentNode;
+            const extraDiv = popupEl.querySelector('.popup-extra');
+
+            const dirBtn = popupEl.querySelector('.btn-dir');
+            const contactBtn = popupEl.querySelector('.btn-contact');
+
+            if (dirBtn) dirBtn.onclick = () => {
+              extraDiv.innerHTML = `
+                <strong>Direction :</strong><br>
+                👤 ${dirNom}<br>
+                📧 ${dirMail ? `<a href="mailto:${dirMail}">${dirMail}</a>` : 'Non renseigné'}<br>
+                ☎️ ${dirTel ? `<a href="tel:${dirTel}">${dirTel}</a>` : 'Non renseigné'}
+              `;
+              extraDiv.classList.add('show');
+            };
+
+            if (contactBtn) contactBtn.onclick = () => {
+              extraDiv.innerHTML = `
+                <strong>Contact agence :</strong><br>
+                📧 ${contactMail ? `<a href="mailto:${contactMail}">${contactMail}</a>` : 'Non renseigné'}<br>
+                ☎️ ${contactTel ? `<a href="tel:${contactTel}">${contactTel}</a>` : 'Non renseigné'}
+              `;
+              extraDiv.classList.add('show');
+            };
+          });
+
+          markers.push({ name, type, type2, marker });
+
+          done++;
+          const pct = Math.round((done / records.length) * 100);
+          progress.textContent = pct + '%';
+          progressBarInner.style.width = pct + '%';
+        }
+
+        setTimeout(() => { splash.style.opacity = 0; }, 600);
+        setTimeout(() => { splash.style.display = 'none'; }, 1400);
+      }
+
+      main();
+
+      /* Recherche */
+      const searchInput = document.getElementById('searchInput');
+      const resultsList = document.getElementById('resultsList');
+
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        resultsList.innerHTML = '';
+        if (!q) { resultsList.style.display = 'none'; return; }
+
+        const filtered = markers.filter(m =>
+          m.name.toLowerCase().includes(q) ||
+          m.type.toLowerCase().includes(q) ||
+          (m.type2 && m.type2.toLowerCase().includes(q))
+        );
+
+        if (filtered.length === 0) {
+          resultsList.innerHTML = "<div class='result-item'>Aucune agence trouvée</div>";
+          resultsList.style.display = 'block';
+          return;
+        }
+
+        filtered.forEach((m) => {
+          const item = document.createElement('div');
+          item.className = 'result-item';
+          item.innerHTML = `<b>${m.name}</b><br><small>${m.type2 || m.type}</small>`;
+          item.addEventListener('click', () => {
+            map.setView(m.marker.getLatLng(), 13);
+            m.marker.openPopup();
+            resultsList.style.display = 'none';
+          });
+          resultsList.appendChild(item);
+        });
+
+        resultsList.style.display = 'block';
       });
-      const data = await res.json();
-      if (data.error) {
-        console.error('Erreur Airtable:', data.error);
-        alert(`Erreur Airtable: ${data.error.message || data.error.type}`);
-        break;
-      }
-      all.push(...(data.records || []));
-      if (!data.offset) break;
-      offset = data.offset;
-    }
-    return all;
-  }
-
-  async function main() {
-    loader.style.display = 'block';
-    loaderText.textContent = 'Chargement des agences…';
-    loaderBar.style.width = '5%';
-
-    const records = await fetchAllRecords();
-    if (!records.length) {
-      loader.style.display = 'none';
-      alert("Aucun enregistrement reçu d’Airtable (vérifie le TABLE_ID ou les permissions).");
-      return;
-    }
-
-    let done = 0;
-    for (const rec of records) {
-      const f = rec.fields || {};
-      const lat = parseFloat(f["Latitude"]);
-      const lng = parseFloat(f["Longitude"]);
-
-      // On ne place que si les coordonnées existent
-      if (!isNaN(lat) && !isNaN(lng)) {
-        const popup = `
-          <strong>${f["AGENCE "] || "Sans nom"}</strong><br>
-          📍 ${f["ADRESSE"] || ""}, ${f["VILLE"] || ""} ${f["CODE POSTAL"] || ""}<br>
-          👤 Direction : ${f["DIRECTION D'AGENCE"] || ""}<br>
-          📧 ${f["MAIL CONTACT LEAD "] || ""}<br>
-          🌐 <a href="${f["LIEN SITE WEB "] || "#"}" target="_blank">Site web</a><br>
-          ⭐ <a href="${f["URL Avis Google"] || "#"}" target="_blank">Avis Google</a>
-        `;
-
-        L.circleMarker([lat, lng], {
-          color: colorByType(f["TYPE AGENCE"]),
-          radius: 8,
-          fillOpacity: 0.85
-        }).addTo(map).bindPopup(popup);
-      }
-
-      done++;
-      const pct = Math.max(5, Math.round((done / records.length) * 100));
-      loaderText.textContent = `Placement des agences… ${pct}%`;
-      loaderBar.style.width = pct + '%';
-    }
-
-    loader.style.display = 'none';
-  }
-
-  main();
-  </script>
-</body>
+    </script>
+  </body>
 </html>
